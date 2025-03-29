@@ -1,13 +1,13 @@
-name: Process New PowerShell Tip
+name: process-new-powershell-tip-issue
 
 on:
   issues:
-    types: [opened]
+    types: [opened, labeled] # Can add 'labeled' to make troubleshooting easier and simply remove/add label to trigger workflow run.
 
 jobs:
-  process-new-tip:
-    if: contains(github.event.issue.labels.*.name, 'automation-new-tip-do-not-use')
-    runs-on: ubuntu-latest
+  process-new-tip-issue:
+    if: contains(github.event.issue.labels.*.name, 'automation-new-tip-issue-do-not-use')
+    runs-on: windows-latest # Use Windows to ensure dotnet SDK is installed to build the assemblies.
     permissions:
       contents: write
       issues: write
@@ -19,14 +19,50 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Create branch for PR
+        id: create-branch
+        shell: pwsh
+        run: |
+          [string] $branchName = "new-tip/issue-${{ github.event.issue.number }}"
+
+          Write-Output "Creating and checking out new branch: $branchName"
+          git config --global user.name 'GitHub Action - tiPS Automation'
+          git config --global user.email 'tiPSAutomation@DoesNotExist.com'
+          git checkout -b "$branchName"
+
+          Write-Output "Writing variables to environment variables for later steps..."
+          "branch_name=$branchName" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Add comment to issue letting user know we are processing it
+        shell: pwsh
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --body "Thank you for your submission! 🙏 A pull request is being created for your tip and should be linked to this issue shortly... ⏱️"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # - name: Write tip information to local file
+      #   id: write-issue-body
+      #   shell: pwsh
+      #   run: |
+      #     Write-Output "Creating issue body file..."
+
+      #     Write-Output "Writing variables to environment variables for later steps..."
+      #     "issue_body_file_path=$newTipFilePath" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Extract tip information from issue
         id: extract-tip
         shell: pwsh
         run: |
-          $issue = ConvertFrom-Json '${{ toJson(github.event.issue) }}'
-          $body = $issue.body
+          Write-Output "Reading information from GitHub issue..."
+          # Need to escape quotes in the issue body so they don't break the PowerShell syntax.
+          $body = @'
+          ${{ github.event.issue.body }}
+          '@
 
-          # Parse the issue body to extract fields.
+          Write-Output "Displaying issue body for troubleshooting purposes:"
+          Write-Output $body
+
+          Write-Output "Extracting information from issue body to local variables..."
           [string] $tipTitle = [string]::Empty
           [string] $tipText = [string]::Empty
           [string] $tipExample = [string]::Empty
@@ -35,100 +71,147 @@ jobs:
           [string] $tipAuthor = [string]::Empty
           [string] $tipExpiryDate = [string]::Empty
 
-          # Extract data from the JSON representation of the issue.
-          # The structure will depend on the form fields defined in the YAML issue template.
-          foreach ($item in ($body | ConvertFrom-Json)) {
-            $id = $item.id
-            $value = $item.value
+          # Extract the data from the markdown representation of the issue.
+          # GitHub Forms generates structured markdown with specific section headers we can match against.
+          # Below is a sample of what the body data may look like:
+          #
+          # ### Tip Title (required)
+          # Test title
+          # ### Tip Text (required)
+          # Test description
+          # ### Example Code (optional)
+          # ```powershell
+          # Test code
+          # ```
+          # ### URL 1 (optional)
+          # https://one.com
+          # ### URL 2 (optional)
+          # http://two.com
+          # ### URL 3 (optional)
+          # _No response_
+          # ### Category (required)
+          # Terminal
+          # ### Author (optional)
+          # _No response_
+          # ### Expiry Date (optional)
+          # _No response_
 
-            switch ($id) {
-              'title' { $tipTitle = $value }
-              'tipText' { $tipText = $value }
-              'example' { $tipExample = $value }
-              'category' { $tipCategory = $value }
-              'url1' { if (-not [string]::IsNullOrWhiteSpace($value)) { $tipUrls += $value } }
-              'url2' { if (-not [string]::IsNullOrWhiteSpace($value)) { $tipUrls += $value } }
-              'url3' { if (-not [string]::IsNullOrWhiteSpace($value)) { $tipUrls += $value } }
-              'author' { $tipAuthor = $value }
-              'expiryDate' { $tipExpiryDate = $value }
+          # The default text that GitHub Issues uses for optional fields that are not filled in.
+          [string] $noResponseText = '_No response_'
+
+          # Extract Title.
+          [regex] $titleRegex = '### Tip Title \(required\)\s+(?<Title>.*?)\s+### Tip Text'
+          if ($body -match $titleRegex) {
+            $tipTitle = $Matches['Title'].Trim()
+            Write-Output "Extracted Title: $tipTitle"
+          }
+
+          # Extract Tip Text.
+          [regex] $tipTextRegex = '### Tip Text \(required\)\s+(?<TipText>.*?)\s+### Example Code'
+          if ($body -match $tipTextRegex) {
+            $tipText = $Matches['TipText'].Trim()
+            Write-Output "Extracted Tip Text: $tipText"
+          }
+
+          # Extract Example Code.
+          [regex] $exampleRegex = '### Example Code \(optional\)\s+```powershell\\n(?<ExampleCode>.*?)```\s+### URL 1'
+          if ($body -match $exampleRegex) {
+            $tipExample = $Matches['ExampleCode'].Trim()
+            Write-Output "Extracted Example Code: $tipExample"
+          }
+
+          # Extract URLs (up to 3).
+          [regex] $url1Regex = '### URL 1 \(optional\)\s+(?<Url1>.*?)\s+### URL 2'
+          if ($body -match $url1Regex) {
+            $url = $Matches['Url1'].Replace($noResponseText, '').Trim()
+            if (-not [string]::IsNullOrWhiteSpace($url)) {
+              $tipUrls += $url
+              Write-Output "Extracted URL 1: $url"
             }
           }
 
-          # Set current date as CreatedDate.
-          $tipCreatedDate = Get-Date -Format "yyyy-MM-dd"
+          [regex] $url2Regex = '### URL 2 \(optional\)\s+(?<Url2>.*?)\s+### URL 3'
+          if ($body -match $url2Regex) {
+            $url = $Matches['Url2'].Replace($noResponseText, '').Trim()
+            if (-not [string]::IsNullOrWhiteSpace($url)) {
+              $tipUrls += $url
+              Write-Output "Extracted URL 2: $url"
+            }
+          }
 
-          # Get the file contents by dot-sourcing the file with the function to call.
-          . $GITHUB_WORKSPACE/.github/workflows/ProcessNewPowerShellTipIssueFunctions.ps1
-          $getFileContentsParameters = @{
-            TipCreatedDate = $tipCreatedDate
+          [regex] $url3Regex = '### URL 3 \(optional\)\s+(?<Url3>.*?)\s+### Category'
+          if ($body -match $url3Regex) {
+            $url = $Matches['Url3'].Replace($noResponseText, '').Trim()
+            if (-not [string]::IsNullOrWhiteSpace($url)) {
+              $tipUrls += $url
+              Write-Output "Extracted URL 3: $url"
+            }
+          }
+
+          # Extract Category.
+          [regex] $categoryRegex = '### Category \(required\)\s+(?<Category>.*?)\s+### Author'
+          if ($body -match $categoryRegex) {
+            $tipCategory = $Matches['Category'].Trim()
+            Write-Output "Extracted Category: $tipCategory"
+          }
+
+          # Extract Author.
+          [regex] $authorRegex = '### Author \(optional\)\s+(?<Author>.*?)\s+### Expiry Date'
+          if ($body -match $authorRegex) {
+            $tipAuthor = $Matches['Author'].Trim()
+            Write-Output "Extracted Author: $tipAuthor"
+          }
+
+          Write-Output "Dot-sourcing utility script used to create the new tip file..."
+          [string] $gitRootDirectoryPath = $Env:GITHUB_WORKSPACE
+          . "$gitRootDirectoryPath/.github/workflows/ProcessNewPowerShellTipIssueFunctions.ps1"
+
+          Write-Output "Calling function to create new tip file..."
+          $newTipFileParameters = @{
             TipTitle = $tipTitle
             TipText = $tipText
-            TipExample = $tipExample
+            TipExample = $tipExample.Replace($noResponseText, '').Trim()
             TipUrls = $tipUrls
-            TipCategory = $tipCategory
-            TipAuthor = $tipAuthor
+            TipCategory = $tipCategory.Replace($noResponseText, '').Trim()
+            TipAuthor = $tipAuthor.Replace($noResponseText, '').Trim()
             TipExpiryDate = $tipExpiryDate
           }
-          [string] $fileContent = Get-PowerShellTipFileContents @getFileContentsParameters
+          [string] $newTipFilePath = New-PowerShellTipFile @newTipFileParameters
 
-          # Create branch name and filename.
-          $branchName = "new-tip/issue-$($issue.number)"
-          $fileName = "$tipCreatedDate-$($tipTitle.ToLower() -replace '[^a-z0-9]', '-' -replace '-+', '-').ps1"
-          $filePath = "src/PowerShellTips/$fileName"
-
-          # Output variables for next steps.
-          "branch_name=$branchName" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "file_name=$fileName" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "file_path=$filePath" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "file_content=$fileContent" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "issue_number=$($issue.number)" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Output "Writing variables to environment variables for later steps..."
+          "tip_file_path=$newTipFilePath" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
           "tip_title=$tipTitle" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Create branch
-        run: |
-          git config --global user.name 'GitHub Action'
-          git config --global user.email 'action@github.com'
-          git checkout -b "${{ steps.extract-tip.outputs.branch_name }}"
-        shell: bash
-
-      - name: Create tip file
-        run: |
-          # Ensure directory exists
-          $directory = Split-Path -Parent "${{ steps.extract-tip.outputs.file_path }}"
-          if (-not (Test-Path $directory)) {
-            New-Item -ItemType Directory -Path $directory -Force
-          }
-
-          # Create the file
-          Set-Content -Path "${{ steps.extract-tip.outputs.file_path }}" -Value "${{ steps.extract-tip.outputs.file_content }}"
-        shell: pwsh
-
       - name: Push changes and create PR
+        id: create-pr
+        shell: pwsh
         run: |
-          git add "${{ steps.extract-tip.outputs.file_path }}"
-          git commit -m "Add new PowerShell tip: ${{ steps.extract-tip.outputs.tip_title }}"
-          git push --set-upstream origin "${{ steps.extract-tip.outputs.branch_name }}"
+          Write-Output "Committing changes to local branch and pushing to remote..."
+          git add "${{ steps.extract-tip.outputs.tip_file_path }}"
+          git commit -m "Add new tip: ${{ steps.extract-tip.outputs.tip_title }}"
+          git push --set-upstream origin "${{ steps.create-branch.outputs.branch_name }}"
 
-          # Create PR
-          gh pr create \
-            --title "New PowerShell Tip: ${{ steps.extract-tip.outputs.tip_title }}" \
-            --body "This PR adds a new PowerShell tip submitted via issue #${{ steps.extract-tip.outputs.issue_number }}." \
-            --label "enhancement" \
-            --label "new-tip"
+          Write-Output "Creating pull request..."
+          [string] $prUrl = gh pr create `
+            --title "Tip: ${{ steps.extract-tip.outputs.tip_title }}" `
+            --body "This PR adds a new PowerShell tip submitted via issue #${{ github.event.issue.number }}." `
+            --label "automation-new-tip-pr-do-not-use"
+
+          Write-Output "Writing variables to environment variables for later steps..."
+          "pr_url=$prUrl" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
 
-      - name: Add comment to issue
+      - name: Add comment to issue with link to PR
+        shell: pwsh
         run: |
-          gh issue comment "${{ steps.extract-tip.outputs.issue_number }}" --body "Thanks for your submission! I've created a pull request with your tip. You can view it here: ${{ github.server_url }}/${{ github.repository }}/pull/$(gh pr list --head ${{ steps.extract-tip.outputs.branch_name }} --json number --jq '.[0].number')"
+          gh issue comment "${{ github.event.issue.number }}" --body "Thanks for contributing! 🙌 A pull request has been created for your tip. You can view it at PR ${{ steps.create-pr.outputs.pr_url }}."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
 
       - name: Close issue
+        shell: pwsh
         run: |
-          gh issue close "${{ steps.extract-tip.outputs.issue_number }}" --comment "This issue has been processed and a pull request has been created with your tip."
+          gh issue close "${{ github.event.issue.number }}" --comment "This issue has been processed and a pull request has been created with your tip. Closing this issue."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
