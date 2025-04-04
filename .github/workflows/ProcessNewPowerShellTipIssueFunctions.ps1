@@ -1,9 +1,6 @@
-function Get-PowerShellTipFileContents {
+function New-PowerShellTipFile {
+	[System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
 	param(
-		[Parameter(Mandatory = $true, HelpMessage = 'The date the tip was created. Format: YYYY-MM-DD')]
-		[ValidateNotNullOrWhiteSpace()]
-		[string] $TipCreatedDate,
-
 		[Parameter(Mandatory = $true, HelpMessage = 'The title of the tip. Must be 75 characters or less.')]
 		[ValidateNotNullOrWhiteSpace()]
 		[string] $TipTitle,
@@ -29,28 +26,50 @@ function Get-PowerShellTipFileContents {
 		[string] $TipExpiryDate = ''
 	)
 
-	[string] $tipTemplateFileContents = @"
+	Write-Information "Building tiPS C# assemblies and importing module..." -InformationAction Continue
+	$buildOutput = . "$PSScriptRoot/../../tools/Helpers/ImportBuiltModule.ps1"
+
+	# Write the build output as Information messages so it doesn't affect the function's return value.
+	foreach ($entry in $buildOutput) {
+		Write-Information $entry -InformationAction Continue
+	}
+
+	# The Tip filename is based on the ID, which is based on the date and title, so load a dummy PowerShellTip to get the filename to use.
+	$dummyTip = [tiPS.PowerShellTip]::new()
+	$dummyTip.CreatedDate = [DateTime]::Today
+	$dummyTip.Title = $TipTitle.Trim()
+
+	[string] $createdDate = $dummyTip.CreatedDate.ToString('yyyy-MM-dd')
+	[string] $powerShellTipsFilesDirectoryPath = Resolve-Path -Path "$PSScriptRoot/../../src/PowerShellTips"
+	[string] $newTipFileName = $dummyTip.Id + '.ps1'
+	[string] $newTipFilePath = Join-Path -Path $powerShellTipsFilesDirectoryPath -ChildPath $newTipFileName
+
+	[string] $newTipFileContent = @"
 `$tip = [tiPS.PowerShellTip]::new()
-`$tip.CreatedDate = [DateTime]::Parse('$TipCreatedDate')
+`$tip.CreatedDate = [DateTime]::Parse('$createdDate')
 `$tip.Title = '$($TipTitle.Replace("'", "''"))'
-`$tip.TipText = $TipText
-`$tip.Example = $TipExample
-`$tip.Urls = $TipUrls
+`$tip.TipText = @'
+$TipText
+'@
+`$tip.Example = @'
+$TipExample
+'@
+`$tip.Urls = @('$($TipUrls -join "','")')
 `$tip.Category = [tiPS.TipCategory]::$TipCategory # Community, Editor, Module, NativeCmdlet, Performance, Security, Syntax, Terminal, or Other.
 `$tip.Author = '$TipAuthor' # Optional. Get credit for your tip. e.g. 'Daniel Schroeder (deadlydog)'.
 #`$tip.ExpiryDate = [DateTime]::Parse('2024-10-30') # Optional. If the tip is not relevant after a certain date, set the expiration date. e.g. Announcing a conference or event.
 
-# Category meanings:
-# Community: Social events and community resources. e.g. PowerShell Summit, podcasts, etc.
-# Editor: Editor tips and extensions. e.g. VSCode, ISE, etc.
-# Module: Modules and module tips. e.g. PSScriptAnalyzer, Pester, etc.
-# NativeCmdlet: Native cmdlet tips. e.g. Get-Process, Get-ChildItem, Get-Content, etc.
-# Performance: Tips to improve runtime performance. e.g. foreach vs ForEach-Object, ForEach-Object -Parallel, etc.
-# Security: Security tips. e.g. ExecutionPolicy, Constrained Language Mode, passwords, etc.
-# Syntax: Syntax tips. e.g. splatting, pipeline, etc.
-# Terminal: Terminal shortcuts and tips. e.g. PSReadLine, Windows Terminal, ConEmu, etc.
-# Other: Tips that don't fit into any of the other categories.
+# Tip submitted via GitHub issue workflow.
 "@
 
-	return $tipTemplateFileContents
+	# If a TipExpiryDate is provided, uncomment the TipExpiryDate line.
+	if (-not [string]::IsNullOrWhiteSpace($TipExpiryDate)) {
+		[string] $expiryTextToMatch = '$tip.ExpiryDate = [DateTime]::Parse('
+		$newTipFileContent = $newTipFileContent.Replace("#$expiryTextToMatch", $expiryTextToMatch)
+	}
+
+	Write-Information "Creating new tip file '$newTipFilePath'..." -InformationAction Continue
+	Set-Content -Path $newTipFilePath -Value $newTipFileContent -Encoding utf8 -Force
+
+	return $newTipFilePath
 }
