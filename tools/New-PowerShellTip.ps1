@@ -29,13 +29,13 @@ $dummyTip = [tiPS.PowerShellTip]::new()
 $dummyTip.CreatedDate = [DateTime]::Today
 $dummyTip.Title = $tipTitle.Trim()
 
-[string] $today = $dummyTip.CreatedDate.ToString('yyyy-MM-dd')
+[string] $createdDate = $dummyTip.CreatedDate.ToString('yyyy-MM-dd')
 [string] $powerShellTipsFilesDirectoryPath = Resolve-Path -Path "$PSScriptRoot/../src/PowerShellTips"
 [string] $newTipFileName = $dummyTip.Id + '.ps1'
 [string] $newTipFilePath = Join-Path -Path $powerShellTipsFilesDirectoryPath -ChildPath $newTipFileName
 [string] $tipTemplateFileContents = @"
 `$tip = [tiPS.PowerShellTip]::new()
-`$tip.CreatedDate = [DateTime]::Parse('$today')
+`$tip.CreatedDate = [DateTime]::Parse('$createdDate')
 `$tip.Title = '$($tipTitle.Replace("'", "''"))'
 `$tip.TipText = @'
 A short description of the tip.
@@ -58,18 +58,18 @@ Example code to demonstrate the tip. This can also be multiple lines if needed. 
 
 # Category meanings:
 # Community: Social events and community resources. e.g. PowerShell Summit, podcasts, etc.
-# Editor: Editor tips and extensions. e.g. VSCode, ISE, etc.
+# Editor: Editor tips and extensions. e.g. VS Code, ISE, etc.
 # Module: Modules and module tips. e.g. PSScriptAnalyzer, Pester, etc.
 # NativeCmdlet: Native cmdlet tips. e.g. Get-Process, Get-ChildItem, Get-Content, etc.
 # Performance: Tips to improve runtime performance. e.g. foreach vs ForEach-Object, ForEach-Object -Parallel, etc.
 # Security: Security tips. e.g. ExecutionPolicy, Constrained Language Mode, passwords, etc.
-# Syntax: Syntax tips. e.g. splatting, pipeline, etc.
+# Syntax: Syntax tips. e.g. splatting, pipeline, keywords, etc.
 # Terminal: Terminal shortcuts and tips. e.g. PSReadLine, Windows Terminal, ConEmu, etc.
 # Other: Tips that don't fit into any of the other categories.
 "@
 
 Write-Output "Creating new PowerShell Tip file and opening it: $newTipFilePath"
-Set-Content -Path $newTipFilePath -Value $tipTemplateFileContents -Force
+Set-Content -Path $newTipFilePath -Value $tipTemplateFileContents -Encoding utf8 -Force
 try
 {
 	Invoke-Item -Path $newTipFilePath -ErrorVariable openTipFileError
